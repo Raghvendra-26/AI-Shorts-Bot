@@ -14,6 +14,14 @@ from src.bg_query import bg_query_from_niche
 from src.bg_music_fetcher import fetch_background_music
 from src.render import render_video
 from src.utils.srt_to_ass import srt_to_ass
+from src.utils.logger import logger
+from src.script_quality import (
+    generate_multiple_scripts,
+    select_best_script,
+    regenerate_hook,
+    rewrite_long_sentences
+)
+
 
 
 # ---------------- UTILS ---------------- #
@@ -50,13 +58,13 @@ def get_audio_duration(path: str) -> float:
 # ---------------- MAIN PIPELINE ---------------- #
 
 def generate_short(idea: str):
-    print(f"💡 Using idea: {idea}")
+    logger.info(f"Using idea: {idea}")
 
     if len(idea.split()) < 4:
         raise RuntimeError("Idea too short")
 
     # 1️⃣ SCRIPT
-    print("📝 Generating script...")
+    logger.info("Generating script")
     script_prompt = f"""
 Write a 30–45 second YouTube Shorts spoken script.
 
@@ -73,29 +81,37 @@ Rules:
 Return ONLY the script.
 """
 
-    script = clean_llm_script(generate_short_script(script_prompt))
+    scripts = generate_multiple_scripts(script_prompt, n=2)
+    script = select_best_script(scripts)
+
+    script = regenerate_hook(script, idea)
+    script = rewrite_long_sentences(script)
+
+    script = clean_llm_script(script)
+
+
     wc = len(script.split())
-    print(f"🧠 Script word count: {wc}")
+    logger.info(f"Script word count: {wc}")
 
     if wc < 80:
         raise RuntimeError("Script too short")
 
     # 2️⃣ VOICE
-    print("🎙️ Generating voice...")
+    logger.info("Generating voice")
     clean_script = sanitize_for_tts(script).strip()
 
     if not clean_script:
-        print("⚠️ sanitize_for_tts empty → using raw script")
+        logger.warning("sanitize_for_tts empty → using raw script")
         clean_script = script.strip()
 
     voice_path = text_to_speech(clean_script)
 
     # 3️⃣ AUDIO DURATION
     duration = get_audio_duration(voice_path)
-    print(f"🔊 Audio duration: {duration:.2f}s")
+    logger.info(f"Audio duration: {duration:.2f}s")
 
     # 4️⃣ CAPTIONS → ASS
-    print("📝 Generating captions...")
+    logger.info("Generating captions")
     captions_srt = os.path.abspath("assets/captions.srt")
 
     generate_word_level_srt(
@@ -109,14 +125,14 @@ Return ONLY the script.
     captions_ass = srt_to_ass(captions_srt)
 
     # 5️⃣ BACKGROUND VIDEO
-    print("🎥 Fetching background video...")
+    logger.info("Fetching background video")
     bg_video = fetch_background(bg_query_from_niche(idea))
 
     if not bg_video or not os.path.exists(bg_video):
         raise RuntimeError("Background video missing")
 
     # 6️⃣ MUSIC
-    print("🎵 Fetching background music...")
+    logger.info("Fetching background music")
     try:
         bg_music = fetch_background_music(idea)
     except Exception:
@@ -128,7 +144,7 @@ Return ONLY the script.
         bg_music = os.path.abspath(bg_music)
 
     # 7️⃣ RENDER
-    print("🎬 Rendering video...")
+    logger.info("Rendering video")
     render_video(
         bg_video=os.path.abspath(bg_video),
         audio_file=os.path.abspath(voice_path),
@@ -138,6 +154,7 @@ Return ONLY the script.
     )
 
     print("✅ Short video generated successfully!")
+    logger.info("Short video generated successfully")
 
 
 # ---------------- ENTRY ---------------- #
