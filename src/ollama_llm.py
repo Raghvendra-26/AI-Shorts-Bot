@@ -1,90 +1,100 @@
 # src/ollama_llm.py
 import subprocess
-import os
 import time
+import logging
+
+# -------------------------------------------------
+# CONFIG
+# -------------------------------------------------
 
 OLLAMA_PATH = r"C:\Users\rsr26\AppData\Local\Programs\Ollama\ollama.exe"
-OLLAMA_MODEL = "llama3.1:8b"
 
-# Hard safety limits
-OLLAMA_TIMEOUT = 120  # seconds
+# GPU-first (your current model)
+GPU_MODEL = "llama3.1:8b"
+
+# CPU-safe fallback (lighter, stable)
+CPU_MODEL = "llama3.2:3b"
+
+# Retry config
 OLLAMA_RETRIES = 2
+RETRY_DELAY_SEC = 2
+
+# Minimum acceptable output length (safety)
+MIN_WORDS = 40
+
+logger = logging.getLogger(__name__)
 
 
-def generate_short_script(topic: str) -> str:
-    if not topic or not topic.strip():
-        raise RuntimeError("Empty topic passed to LLM")
+# -------------------------------------------------
+# INTERNAL RUNNER
+# -------------------------------------------------
 
-    prompt = f"""
-You are a professional YouTube Shorts scriptwriter.
+def _run_ollama(model: str, prompt: str) -> str:
+    """
+    Runs ollama once with the given model.
+    Raises RuntimeError on failure.
+    """
+    result = subprocess.run(
+        [OLLAMA_PATH, "run", model],
+        input=prompt,
+        text=True,
+        capture_output=True,
+        encoding="utf-8",
+        errors="ignore"
+    )
 
-TASK:
-Write ONLY the spoken dialogue for a viral YouTube Shorts video.
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
 
-TOPIC:
-{topic}
+    output = result.stdout.strip()
 
-STRICT RULES (VERY IMPORTANT):
-- DO NOT say phrases like:
-  "here's a script"
-  "this video"
-  "in this short"
-  "30–45 seconds"
-  "youtube shorts"
-- DO NOT introduce the script
-- DO NOT explain anything
-- DO NOT use headings
-- DO NOT use timestamps
-- DO NOT use markdown
-- DO NOT use emojis
+    if not output or len(output.split()) < MIN_WORDS:
+        raise RuntimeError("LLM returned empty or weak response")
 
-STYLE:
-- Spoken dialogue ONLY
-- Conversational
-- Short punchy sentences
-- Strong hook in first line
-- End with ONE short CTA
+    return output
 
-OUTPUT:
-Return ONLY the spoken words.
-NOTHING ELSE.
-""".strip()
 
-    # 🔒 FORCE CPU (prevents CUDA crash)
-    env = os.environ.copy()
-    env["OLLAMA_NO_CUDA"] = "1"
+# -------------------------------------------------
+# PUBLIC API
+# -------------------------------------------------
+
+def generate_short_script(prompt: str) -> str:
+    """
+    GPU-first script generation with CPU fallback.
+    Guaranteed to return non-empty text or raise a clear error.
+    """
 
     last_error = None
 
+    # -------------------------------
+    # 1️⃣ TRY GPU MODEL
+    # -------------------------------
     for attempt in range(1, OLLAMA_RETRIES + 1):
         try:
-            result = subprocess.run(
-                [OLLAMA_PATH, "run", OLLAMA_MODEL],
-                input=prompt,
-                text=True,
-                capture_output=True,
-                encoding="utf-8",
-                errors="ignore",
-                timeout=OLLAMA_TIMEOUT,
-                env=env,
-            )
-
-            if result.returncode != 0:
-                raise RuntimeError(result.stderr.strip() or "Ollama failed")
-
-            output = result.stdout.strip()
-
-            if not output or len(output.split()) < 30:
-                raise RuntimeError("LLM returned empty or weak response")
-
-            return output
-
-        except subprocess.TimeoutExpired:
-            last_error = "Ollama timed out"
+            logger.info(f"🧠 Ollama GPU attempt {attempt}")
+            return _run_ollama(GPU_MODEL, prompt)
         except Exception as e:
             last_error = str(e)
+            logger.warning(f"⚠️ GPU attempt {attempt} failed: {e}")
+            time.sleep(RETRY_DELAY_SEC)
 
-        print(f"⚠️ Ollama attempt {attempt} failed: {last_error}")
-        time.sleep(2)
+    logger.warning("🔥 GPU model failed, falling back to CPU model")
 
-    raise RuntimeError(f"Ollama failed after {OLLAMA_RETRIES} attempts: {last_error}")
+    # -------------------------------
+    # 2️⃣ CPU FALLBACK (SAFE MODE)
+    # -------------------------------
+    for attempt in range(1, OLLAMA_RETRIES + 1):
+        try:
+            logger.info(f"🧠 Ollama CPU attempt {attempt}")
+            return _run_ollama(CPU_MODEL, prompt)
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"⚠️ CPU attempt {attempt} failed: {e}")
+            time.sleep(RETRY_DELAY_SEC)
+
+    # -------------------------------
+    # ❌ TOTAL FAILURE
+    # -------------------------------
+    raise RuntimeError(
+        f"Ollama failed after GPU + CPU attempts. Last error: {last_error}"
+    )

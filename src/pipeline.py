@@ -81,7 +81,7 @@ Rules:
 Return ONLY the script.
 """
 
-    scripts = generate_multiple_scripts(script_prompt, n=2)
+    scripts = generate_multiple_scripts(script_prompt, n=3)
     script = select_best_script(scripts)
 
     script = regenerate_hook(script, idea)

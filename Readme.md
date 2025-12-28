@@ -1,51 +1,94 @@
-# 🎬 AI Shorts Generator
+# 🎬 AI Shorts Bot
 
-An end-to-end automated system that creates **YouTube Shorts / Instagram Reels** from a single idea.
+An end-to-end **automated YouTube Shorts / Instagram Reels generator** powered by:
+- Local LLMs (Ollama)
+- Edge-TTS (voice)
+- Whisper (captions)
+- FFmpeg (video rendering)
 
-This project takes an input idea, generates a high-quality spoken script using an LLM, scores and improves the script, generates natural voice-over, creates captions, fetches background video and music, and renders a final vertical short video — fully locally.
+This project converts a **single idea** into a **fully rendered vertical short video** with:
+- High-quality spoken script
+- AI voiceover
+- Auto captions
+- Background video
+- Background music
+- Shorts-safe duration control
 
-Built to be **fault-tolerant**, **rollback-safe**, and **production-oriented**.
+---
+
+## 🚀 Features
+
+- 🧠 **Local LLM scripting** (Ollama – GPU/CPU fallback)
+- 🏆 **Multi-script generation & scoring**
+- 🎯 **Semantic hook scoring** (no keyword hacks)
+- 🔁 **Safe hook regeneration** (minimal LLM calls)
+- ✍️ **Sentence length optimization**
+- 🎙️ **Edge-TTS voice generation**
+- 📝 **Word-level captions using Whisper**
+- 🎥 **Automatic background video selection**
+- 🎵 **Optional background music**
+- ⏱️ **Hard duration cap (Shorts-safe)**
+- 🧱 **Production-grade error handling**
+- 📜 **Structured logging**
 
 ---
 
-## ✨ Key Features
+## 📂 Project Structure
 
-### 🧠 Intelligent Script Generation
-- Multi-prompt script generation
-- Automatic script quality scoring
-- Best script selection
-- Hook strength optimization
-- Sentence length normalization
-- CTA enforcement
-
-### 🎙️ Voice Generation
-- Uses **Edge-TTS**
-- Stable and natural narration
-- Audio duration capped for Shorts safety
-
-### 📝 Captions
-- Word-level captions via **Whisper**
-- SRT → ASS conversion (Windows-safe)
-- Captions synchronized with narration
-
-### 🎥 Background Video
-- Automatically fetched based on idea
-- Seamlessly looped to match audio length
-- Vertical (9:16) optimized
-
-### 🎵 Background Music
-- Optional background music fetch
-- Automatic fallback to silence if unavailable
-
-### 🎬 Rendering
-- FFmpeg-based rendering
-- Correct audio mixing (voice + music)
-- Output duration locked to narration length
-
-### 🧯 Reliability & Safety
-- Handles Ollama / CUDA crashes gracefully
-- Fallbacks at every stage
-- Structured logging for debugging
-- Safe rollbacks using Git tags
+```text
+ai-shorts-bot/
+│
+├── src/
+│   ├── pipeline.py              # Main orchestration pipeline
+│   ├── ollama_llm.py             # Local LLM interface (GPU → CPU fallback)
+│   ├── script_quality.py         # Script scoring & optimization logic
+│   ├── tts_edge.py               # Edge-TTS voice generation
+│   ├── captions_whisper.py       # Word-level caption generation
+│   ├── render.py                 # FFmpeg video rendering
+│   ├── bg_fetcher.py             # Background video downloader
+│   ├── bg_music_fetcher.py       # Background music downloader
+│   ├── bg_query.py               # Niche-based background search
+│   ├── text_utils.py             # Script cleanup & TTS safety
+│   └── utils/
+│       └── srt_to_ass.py         # Caption format conversion
+│
+├── assets/
+│   └── silence.mp3               # Fallback silent audio
+│
+├── outputs/
+│   └── final_short.mp4            # Generated video (runtime)
+│
+├── logs/
+│   └── app.log                   # Runtime logs
+│
+├── requirements.txt
+├── README.md
+└── .gitignore
+```
 
 ---
+
+## Python dependencies
+- pip install -r requirements.txt
+
+---
+
+## Ollama models
+- ollama pull llama3.2:3b
+- ollama pull llama3.1:8b
+
+---
+
+## How to run 
+- python -m src.pipeline "your idea"
+
+---
+
+## Output
+- outputs/final_short.mp4
+
+
+---
+
+# Credits
+- By Raghvendra Singh

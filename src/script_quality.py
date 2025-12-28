@@ -7,6 +7,14 @@ HOOK_KEYWORDS = {
     "you", "they", "real", "hidden"
 }
 
+EMOTION_WORDS = {
+    "secret", "mistake", "truth", "dangerous", "destroy",
+    "powerful", "addicted", "obsessed", "insane", "monster",
+    "hidden", "nobody", "never", "stop", "ruining", "changed"
+}
+
+QUESTION_WORDS = {"why","how","what"}
+
 # ---------------- BASIC UTILS ---------------- #
 
 def split_sentences(text: str):
@@ -21,9 +29,9 @@ def score_script(script: str) -> dict:
     word_count = len(words)
     avg_sentence_len = sum(len(s.split()) for s in sentences) / max(len(sentences), 1)
 
-    hook_words = words[:10]
-    hook_score = sum(1 for w in hook_words if w.lower() in HOOK_KEYWORDS) * 10
-    hook_score = min(hook_score, 50)
+    hook = extract_hook(script)
+    hook_score = score_hook(hook)
+
 
     score = 0
     score += min(word_count / 120 * 40, 40)
@@ -70,22 +78,51 @@ def replace_hook(script: str, new_hook: str) -> str:
     return ". ".join(sentences) + "."
 
 def score_hook(hook: str) -> int:
+    if not hook:
+        return 0
+
     words = hook.lower().split()
     score = 0
-    if len(words) <= 10:
-        score += 40
-    if any(w in HOOK_KEYWORDS for w in words):
-        score += 60
-    return score
 
-def regenerate_hook(script: str, topic: str):
-    """Single-attempt hook regeneration (FAIL-SAFE)"""
+    # 1️⃣ Brevity (hooks must be tight)
+    if len(words) <= 8:
+        score += 30
+    elif len(words) <= 12:
+        score += 15
+
+    # 2️⃣ Curiosity gap
+    if "?" in hook:
+        score += 20
+    if any(w in QUESTION_WORDS for w in words):
+        score += 15
+
+    # 3️⃣ Direct address
+    if any(w in {"you", "your"} for w in words):
+        score += 15
+
+    # 4️⃣ Emotional / power words
+    score += min(
+        sum(1 for w in words if w in EMOTION_WORDS) * 5,
+        20
+    )
+
+    # 5️⃣ Specificity (numbers, years)
+    if re.search(r"\d", hook):
+        score += 10
+
+    return min(score, 100)
+
+def regenerate_hook(script: str, topic: str, max_attempts=1):
     hook = extract_hook(script)
 
-    if score_hook(hook) >= 80:
+    # 🔒 Accept good hooks — no LLM calls
+    if score_hook(hook) >= 70:
         return script
 
-    prompt = f"""
+    for i in range(max_attempts):
+        print(f"🔁 Improving hook (attempt {i+1})")
+
+        prompt = f"""
 Rewrite ONLY the first line for virality.
 
 Topic:
@@ -95,17 +132,24 @@ Rules:
 - Max 10 words
 - Spoken dialogue
 - Curiosity driven
+- NO emojis
 - Return ONLY the hook
 """
 
-    try:
-        new_hook = generate_short_script(prompt).strip()
-        if new_hook and len(new_hook.split()) >= 3:
-            return replace_hook(script, new_hook)
-    except Exception as e:
-        print(f"⚠️ Hook regeneration skipped: {e}")
+        try:
+            new_hook = generate_short_script(prompt).strip()
+            if not new_hook or len(new_hook.split()) < 3:
+                raise ValueError("Weak hook")
 
-    return script  # SAFE FALLBACK
+            script = replace_hook(script, new_hook)
+            return script  # ✅ STOP after first success
+
+        except Exception as e:
+            print(f"⚠️ Hook regeneration failed: {e}")
+            return script  # 🔥 FAIL-SAFE
+
+    return script
+
 
 # ---------------- SENTENCE REWRITE (BATCH) ---------------- #
 
