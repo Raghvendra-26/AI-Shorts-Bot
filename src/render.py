@@ -11,23 +11,42 @@ def render_video(bg_video, audio_file, music_file, output_file, duration):
     cmd = [
         "ffmpeg", "-y",
 
-        # HARD LIMIT VIDEO LENGTH = VOICE LENGTH
+        # Cap output duration
         "-t", str(duration),
 
         # Background video (loop)
         "-stream_loop", "-1", "-i", bg_video,
 
-        # Main voice (clock)
+        # Narration (MAIN)
         "-i", audio_file,
 
         # Background music (loop)
         "-stream_loop", "-1", "-i", music_file,
 
         "-filter_complex",
-        "[1:a]volume=1.0[a1];"
-        "[2:a]volume=0.06[a2];"
-        "[a1][a2]amix=inputs=2[aout]",
 
+        # ---------------- AUDIO GRAPH ----------------
+
+        # Narration: clean, stable, dominant
+        "[1:a]"
+        "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+        "highpass=f=80,"
+        "lowpass=f=12000,"
+        "alimiter=limit=0.98"
+        "[voice];"
+
+        # Music: fixed LOW volume, no dynamics
+        "[2:a]"
+        "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+        "volume=0.08"
+        "[music];"
+
+        # Mix WITHOUT normalization
+        "[voice][music]"
+        "amix=inputs=2:normalize=0"
+        "[aout]",
+
+        # ---------------- OUTPUT ----------------
         "-map", "0:v",
         "-map", "[aout]",
 
