@@ -70,16 +70,19 @@ def concat_background_clips(clips: list[str], per_clip_duration: float) -> str:
     merged = "assets/bg_cache/merged_background.mp4"
 
     subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", concat_file,
-            "-c", "copy",
-            merged
-        ],
-        check=True
-    )
+    [
+        "ffmpeg", "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", concat_file,
+        "-vf", "fps=30",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-pix_fmt", "yuv420p",
+        merged
+    ],
+    check=True
+)
 
     # ---------------- CLEANUP ---------------- #
 

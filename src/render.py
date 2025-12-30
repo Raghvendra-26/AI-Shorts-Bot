@@ -2,52 +2,59 @@
 import subprocess
 import os
 
-def render_video(bg_video, audio_file, music_file, output_file, duration):
-    bg_video = os.path.abspath(bg_video).replace("\\", "/")
-    audio_file = os.path.abspath(audio_file).replace("\\", "/")
-    music_file = os.path.abspath(music_file).replace("\\", "/")
-    output_file = os.path.abspath(output_file).replace("\\", "/")
+def render_video(
+    bg_video: str,
+    audio_file: str,
+    music_file: str,
+    output_file: str,
+    duration: float,
+    subtitles_path: str | None = None
+):
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    filters = []
+
+    # ---------------- VIDEO FILTER ---------------- #
+    if subtitles_path:
+        # IMPORTANT: escape path safely for Windows FFmpeg
+        sub_path = subtitles_path.replace("\\", "/").replace(":", "\\:")
+        filters.append(f"[0:v]subtitles='{sub_path}'[vout]")
+    else:
+        filters.append("[0:v]null[vout]")
+
+    # ---------------- AUDIO FILTER ---------------- #
+    filters.append(
+        "[1:a]"
+        "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+        "highpass=f=80,lowpass=f=12000,alimiter=limit=0.97[voice]"
+    )
+
+    filters.append(
+        "[2:a]"
+        "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+        "volume=0.15[music]"
+    )
+
+    filters.append("[voice][music]amix=inputs=2:normalize=0[aout]")
+
+    filter_complex = ";".join(filters)
 
     cmd = [
         "ffmpeg", "-y",
-
-        # Cap output duration
         "-t", str(duration),
 
-        # Background video (loop)
+        # background loop
         "-stream_loop", "-1", "-i", bg_video,
 
-        # Narration (MAIN)
+        # voice
         "-i", audio_file,
 
-        # Background music (loop)
+        # music loop
         "-stream_loop", "-1", "-i", music_file,
 
-        "-filter_complex",
+        "-filter_complex", filter_complex,
 
-        # ---------------- AUDIO GRAPH ----------------
-
-        # Narration: clean, stable, dominant
-        "[1:a]"
-        "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
-        "highpass=f=80,"
-        "lowpass=f=12000,"
-        "alimiter=limit=0.98"
-        "[voice];"
-
-        # Music: fixed LOW volume, no dynamics
-        "[2:a]"
-        "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
-        "volume=0.08"
-        "[music];"
-
-        # Mix WITHOUT normalization
-        "[voice][music]"
-        "amix=inputs=2:normalize=0"
-        "[aout]",
-
-        # ---------------- OUTPUT ----------------
-        "-map", "0:v",
+        "-map", "[vout]",
         "-map", "[aout]",
 
         "-c:v", "libx264",

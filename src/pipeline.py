@@ -4,6 +4,7 @@ import subprocess
 import json
 import uuid
 import random
+import re
 
 from src.tts_edge import text_to_speech
 from src.captions_whisper import generate_word_level_srt
@@ -72,18 +73,43 @@ def reuse_clips(clips: list[str], target: int) -> list[str]:
     return out
 
 
-# ---------------- CTA HANDLING ---------------- #
+# ---------------- CTA SAFETY ---------------- #
 
-def try_attach_cta(
-    text: str,
-    body_duration: float
-) -> tuple[str | None, str | None, float]:
+def is_tts_safe(text: str) -> bool:
+    if not text:
+        return False
+
+    text = text.strip()
+    if len(text) < 8:
+        return False
+
+    if len(text.split()) < 3:
+        return False
+
+    if not re.search(r"[aeiouAEIOU]", text):
+        return False
+
+    return True
+
+
+def try_attach_cta(text: str, body_duration: float):
     """
-    Convert CTA text to audio and validate duration.
-    Returns (cta_text, cta_audio_path, cta_duration) or (None, None, 0.0)
+    Safe CTA attach:
+    - validates text
+    - prevents Edge-TTS crash
+    - duration aware
     """
-    audio = text_to_speech(sanitize_for_tts(text))
-    duration = get_audio_duration(audio)
+    if not is_tts_safe(text):
+        logger.warning(f"CTA rejected (unsafe for TTS): {text}")
+        return None, None, 0.0
+
+    try:
+        safe_text = f"{text}. Thanks for watching."
+        audio = text_to_speech(sanitize_for_tts(safe_text))
+        duration = get_audio_duration(audio)
+    except Exception as e:
+        logger.warning(f"CTA TTS failed: {e}")
+        return None, None, 0.0
 
     if body_duration + duration <= 59:
         return text, audio, duration
@@ -93,6 +119,7 @@ def try_attach_cta(
     except OSError:
         pass
 
+    logger.warning("CTA skipped due to duration overflow")
     return None, None, 0.0
 
 
@@ -143,13 +170,12 @@ Return ONLY the spoken script body.
         )
 
     # -------------------------------------------------
-    # 3️⃣ CTA (LLM + FALLBACK GUARANTEED)
+    # 3️⃣ CTA (LLM → FALLBACK → SAFE)
     # -------------------------------------------------
     cta_text = None
     cta_audio = None
     cta_duration = 0.0
 
-    # ---- Try LLM CTA ----
     cta_prompt = f"""
 Write ONE energetic spoken CTA.
 Max 6 words.
@@ -172,7 +198,6 @@ Return ONLY the sentence.
         if cta_text:
             logger.info(f"LLM CTA added ({cta_duration:.2f}s): {cta_text}")
 
-    # ---- Fallback CTA ----
     if not cta_text:
         fallback = random.choice(CTA_FALLBACK_POOL)
         cta_text, cta_audio, cta_duration = try_attach_cta(
@@ -182,7 +207,7 @@ Return ONLY the sentence.
         if cta_text:
             logger.info(f"Fallback CTA added ({cta_duration:.2f}s): {cta_text}")
         else:
-            logger.warning("CTA skipped due to duration constraints")
+            logger.warning("CTA skipped entirely")
 
     # -------------------------------------------------
     # 4️⃣ MERGE BODY + CTA AUDIO
@@ -215,26 +240,30 @@ Return ONLY the sentence.
         pass
 
     # -------------------------------------------------
-    # 5️⃣ CAPTIONS
+    # 5️⃣ CAPTIONS (SAFE)
     # -------------------------------------------------
-    srt_path = f"assets/captions_{os.getpid()}.srt"
-    generate_word_level_srt(final_voice, srt_path)
-    ass_path = srt_to_ass(srt_path)
+    subtitles_path = None
 
-    if not ass_path or not os.path.exists(ass_path):
-        raise RuntimeError("Subtitle generation failed")
+    try:
+        srt_path = f"assets/captions_{uuid.uuid4().hex}.srt"
+        generate_word_level_srt(final_voice, srt_path)
+
+        ass_path = srt_to_ass(srt_path)
+        if ass_path and os.path.exists(ass_path):
+            subtitles_path = ass_path
+            logger.info("Subtitles generated")
+    except Exception as e:
+        logger.warning(f"Subtitles skipped: {e}")
 
     # -------------------------------------------------
-    # 6️⃣ BACKGROUND CLIPS
+    # 6️⃣ BACKGROUND CLIPS (DIVERSITY + REUSE)
     # -------------------------------------------------
     expected = clip_count_for_duration(total_duration)
     fetched = fetch_background_clips(idea, expected)
 
-    if not fetched:
-        raise RuntimeError("No background clips fetched")
-
     final_clips = reuse_clips(fetched, expected)
     per_clip_duration = total_duration / len(final_clips)
+
     merged_bg = concat_background_clips(final_clips, per_clip_duration)
 
     # -------------------------------------------------
@@ -250,7 +279,8 @@ Return ONLY the sentence.
         audio_file=final_voice,
         music_file=bg_music,
         output_file="outputs/final_short.mp4",
-        duration=total_duration
+        duration=total_duration,
+        subtitles_path=subtitles_path
     )
 
     logger.info("✅ Short video generated successfully")

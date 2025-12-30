@@ -4,8 +4,8 @@ import edge_tts
 import uuid
 import os
 import subprocess
-import time
 import random
+import time
 
 # ---------------- CONFIG ---------------- #
 
@@ -15,7 +15,7 @@ PITCH = "+0Hz"
 ASSETS_DIR = "assets"
 os.makedirs(ASSETS_DIR, exist_ok=True)
 
-# 🎙️ Male voice pools (Edge-TTS)
+# 🎙️ Male voice pools
 VOICE_POOLS = {
     "motivational": [
         "en-IN-PrabhatNeural",
@@ -39,7 +39,6 @@ VOICE_POOLS = {
     ],
 }
 
-# Simple keyword-based mood detection (FAST & SAFE)
 MOOD_KEYWORDS = {
     "motivational": ["success", "discipline", "habits", "growth", "mindset", "goals"],
     "hype": ["win", "dominate", "beast", "champion", "grind"],
@@ -47,8 +46,7 @@ MOOD_KEYWORDS = {
     "dark": ["fear", "dopamine", "addiction", "mistake", "dark"],
 }
 
-
-# ---------------- MOOD DETECTION ---------------- #
+# ---------------- HELPERS ---------------- #
 
 def detect_mood(text: str) -> str:
     t = text.lower()
@@ -58,12 +56,7 @@ def detect_mood(text: str) -> str:
     return "neutral"
 
 
-# ---------------- TEXT CHUNKING ---------------- #
-
 def split_text(text: str, max_chars: int = 800):
-    """
-    Split long text into safe chunks for Edge-TTS
-    """
     sentences = text.replace("\n", " ").split(". ")
     chunks = []
     current = ""
@@ -85,8 +78,6 @@ def split_text(text: str, max_chars: int = 800):
     return chunks
 
 
-# ---------------- EDGE TTS CORE ---------------- #
-
 async def _tts_chunk(text: str, out_path: str, voice: str):
     communicate = edge_tts.Communicate(
         text=text,
@@ -101,55 +92,97 @@ async def _tts_chunk(text: str, out_path: str, voice: str):
 
 def text_to_speech(text: str) -> str:
     """
-    Robust Edge-TTS:
-    - Detects mood
-    - Selects ONE male voice per video
-    - Splits text into chunks
-    - Generates audio per chunk
-    - Merges using ffmpeg
+    Production-safe Edge-TTS:
+    - Mood-based voice selection
+    - Voice rotation on failure
+    - Padding retry
+    - Silent failure detection
+    - FINAL semantic simplification fallback
     """
 
-    if not text.strip():
-        raise RuntimeError("TTS received empty text")
+    text = text.strip()
 
-    mood = detect_mood(text)
-    voice_pool = VOICE_POOLS.get(mood, VOICE_POOLS["neutral"])
-    voice = random.choice(voice_pool)
+    # 🔒 Edge hard-fails on tiny input
+    if len(text.split()) < 4:
+        text = f"{text}. Stay tuned."
 
-    print(f"🎙️ TTS mood: {mood}, voice selected: {voice}")
+    text = (
+        text.replace("—", " ")
+            .replace("–", " ")
+            .replace("…", ".")
+            .replace("\n", " ")
+    )
 
     chunks = split_text(text)
     if not chunks:
-        raise RuntimeError("No valid TTS chunks generated")
+        raise RuntimeError("TTS received empty text")
+
+    mood = detect_mood(text)
+    voices = VOICE_POOLS.get(mood, VOICE_POOLS["neutral"]).copy()
+    random.shuffle(voices)
 
     temp_files = []
 
-    # 🔊 Generate audio per chunk
     for i, chunk in enumerate(chunks):
-        out = f"{ASSETS_DIR}/tmp_{i}_{uuid.uuid4().hex}.wav"
+        success = False
 
-        try:
-            asyncio.run(_tts_chunk(chunk, out, voice))
-        except Exception as e:
-            raise RuntimeError(f"Edge-TTS failed on chunk {i}: {e}")
+        # ---------------- NORMAL VOICE ROTATION ---------------- #
+        for voice in voices:
+            out = f"assets/tmp_{i}_{uuid.uuid4().hex}.wav"
 
-        if not os.path.exists(out) or os.path.getsize(out) < 1000:
-            raise RuntimeError("Edge-TTS produced empty audio chunk")
+            try:
+                asyncio.run(_tts_chunk(chunk, out, voice))
+            except Exception:
+                padded = f"Listen carefully. {chunk}"
+                try:
+                    asyncio.run(_tts_chunk(padded, out, voice))
+                except Exception:
+                    continue
 
-        temp_files.append(out)
+            if os.path.exists(out) and os.path.getsize(out) > 1500:
+                temp_files.append(out)
+                success = True
+                break
 
-        # small delay avoids throttling
-        time.sleep(0.2)
+            try:
+                os.remove(out)
+            except OSError:
+                pass
 
-    # 🧩 Create concat list
-    list_file = f"{ASSETS_DIR}/tts_list.txt"
+        # ---------------- FINAL FAILSAFE (OPTION A) ---------------- #
+        if not success:
+            simplified = (
+                "Here is something interesting. "
+                + chunk.replace(",", ".").replace(" and ", ". ")
+            )
+
+            fallback_voice = "en-US-GuyNeural"
+            out = f"assets/tmp_{i}_{uuid.uuid4().hex}.wav"
+
+            try:
+                asyncio.run(_tts_chunk(simplified, out, fallback_voice))
+                if os.path.exists(out) and os.path.getsize(out) > 1500:
+                    temp_files.append(out)
+                    success = True
+            except Exception:
+                pass
+
+        if not success:
+            raise RuntimeError(
+                "Edge-TTS backend rejected content after all fallbacks"
+            )
+
+        time.sleep(0.15)
+
+    # ---------------- CONCAT ---------------- #
+
+    list_file = f"assets/tts_list_{uuid.uuid4().hex}.txt"
     with open(list_file, "w", encoding="utf-8") as f:
         for p in temp_files:
             f.write(f"file '{os.path.abspath(p)}'\n")
 
-    final_out = f"{ASSETS_DIR}/voice_{uuid.uuid4().hex}.wav"
+    final_out = f"assets/voice_{uuid.uuid4().hex}.wav"
 
-    # 🎧 Merge chunks
     subprocess.run(
         [
             "ffmpeg", "-y",
@@ -162,7 +195,7 @@ def text_to_speech(text: str) -> str:
         check=True
     )
 
-    # 🧹 Cleanup
+    # Cleanup
     for f in temp_files:
         try:
             os.remove(f)
@@ -175,6 +208,6 @@ def text_to_speech(text: str) -> str:
         pass
 
     if not os.path.exists(final_out) or os.path.getsize(final_out) < 2000:
-        raise RuntimeError("Final Edge-TTS audio invalid")
+        raise RuntimeError("Final TTS audio invalid")
 
     return final_out
