@@ -33,7 +33,7 @@ CTA_FALLBACK_POOL = [
     "More amazing shorts coming!",
     "Hit follow now!",
     "Follow to stay inspired!",
-    "Don’t miss the next one!"
+    "Don’t miss the next one!",
 ]
 
 
@@ -58,19 +58,54 @@ def clip_count_for_duration(duration: float) -> int:
     return 5
 
 
-def reuse_clips(clips: list[str], target: int) -> list[str]:
+def split_sentences(text: str) -> list[str]:
+    parts = re.split(r'(?<=[.!?])\s+', text.strip())
+    return [p for p in parts if len(p.split()) >= 4]
+
+
+def build_clip_plan(
+    sentences: list[str],
+    total_duration: float,
+    expected_clips: int
+) -> list[float]:
+    """
+    Sentence-aware clip durations.
+    """
+    if not sentences:
+        return [total_duration / expected_clips] * expected_clips
+
+    weights = [max(len(s.split()), 6) for s in sentences]
+    total_weight = sum(weights)
+
+    durations = [(w / total_weight) * total_duration for w in weights]
+
+    # Reduce / expand to expected clip count
+    if len(durations) > expected_clips:
+        durations = durations[:expected_clips]
+    elif len(durations) < expected_clips:
+        avg = total_duration / expected_clips
+        while len(durations) < expected_clips:
+            durations.append(avg)
+
+    return durations
+
+
+def reuse_no_adjacent(clips: list[str], target: int) -> list[str]:
+    """
+    Reuse clips but never allow adjacent duplicates.
+    """
     if not clips:
         raise RuntimeError("No background clips available")
 
-    if len(clips) >= target:
-        return clips[:target]
-
-    out = []
+    result = []
     i = 0
-    while len(out) < target:
-        out.append(clips[i % len(clips)])
+    while len(result) < target:
+        candidate = clips[i % len(clips)]
+        if not result or result[-1] != candidate:
+            result.append(candidate)
         i += 1
-    return out
+
+    return result
 
 
 # ---------------- CTA SAFETY ---------------- #
@@ -78,37 +113,25 @@ def reuse_clips(clips: list[str], target: int) -> list[str]:
 def is_tts_safe(text: str) -> bool:
     if not text:
         return False
-
     text = text.strip()
     if len(text) < 8:
         return False
-
     if len(text.split()) < 3:
         return False
-
     if not re.search(r"[aeiouAEIOU]", text):
         return False
-
     return True
 
 
 def try_attach_cta(text: str, body_duration: float):
-    """
-    Safe CTA attach:
-    - validates text
-    - prevents Edge-TTS crash
-    - duration aware
-    """
     if not is_tts_safe(text):
-        logger.warning(f"CTA rejected (unsafe for TTS): {text}")
         return None, None, 0.0
 
     try:
         safe_text = f"{text}. Thanks for watching."
         audio = text_to_speech(sanitize_for_tts(safe_text))
         duration = get_audio_duration(audio)
-    except Exception as e:
-        logger.warning(f"CTA TTS failed: {e}")
+    except Exception:
         return None, None, 0.0
 
     if body_duration + duration <= 59:
@@ -119,7 +142,6 @@ def try_attach_cta(text: str, body_duration: float):
     except OSError:
         pass
 
-    logger.warning("CTA skipped due to duration overflow")
     return None, None, 0.0
 
 
@@ -129,13 +151,13 @@ def generate_short(idea: str):
     logger.info(f"Using idea: {idea}")
 
     # -------------------------------------------------
-    # 1️⃣ SCRIPT BODY (NO CTA)
+    # 1️⃣ SCRIPT BODY
     # -------------------------------------------------
     script_prompt = f"""
 Write a spoken YouTube Shorts script BODY (NO CTA).
 
 Rules:
-- Strictly between 130–150 words
+- Strictly between 110–120 words
 - Conversational
 - No meta language
 - No CTA
@@ -157,24 +179,18 @@ Return ONLY the spoken script body.
     cleaned = sanitize_spoken_script(clean_llm_script(script))
     script_body = cleaned if cleaned.strip() else original_script
 
+    sentences = split_sentences(script_body)
+
     # -------------------------------------------------
     # 2️⃣ BODY TTS
     # -------------------------------------------------
-    logger.info("Generating narration (body)")
     body_audio = text_to_speech(sanitize_for_tts(script_body))
     body_duration = get_audio_duration(body_audio)
 
-    if body_duration > 57:
-        logger.warning(
-            f"Body narration too long ({body_duration:.2f}s). CTA may be skipped."
-        )
-
     # -------------------------------------------------
-    # 3️⃣ CTA (LLM → FALLBACK → SAFE)
+    # 3️⃣ CTA
     # -------------------------------------------------
-    cta_text = None
-    cta_audio = None
-    cta_duration = 0.0
+    cta_text, cta_audio, cta_duration = None, None, 0.0
 
     cta_prompt = f"""
 Write ONE energetic spoken CTA.
@@ -189,14 +205,10 @@ Return ONLY the sentence.
 
     cta_candidates = generate_multiple_scripts(cta_prompt, n=1)
 
-    if cta_candidates and cta_candidates[0].strip():
-        candidate = cta_candidates[0].strip()
+    if cta_candidates:
         cta_text, cta_audio, cta_duration = try_attach_cta(
-            candidate, body_duration
+            cta_candidates[0], body_duration
         )
-
-        if cta_text:
-            logger.info(f"LLM CTA added ({cta_duration:.2f}s): {cta_text}")
 
     if not cta_text:
         fallback = random.choice(CTA_FALLBACK_POOL)
@@ -204,13 +216,8 @@ Return ONLY the sentence.
             fallback, body_duration
         )
 
-        if cta_text:
-            logger.info(f"Fallback CTA added ({cta_duration:.2f}s): {cta_text}")
-        else:
-            logger.warning("CTA skipped entirely")
-
     # -------------------------------------------------
-    # 4️⃣ MERGE BODY + CTA AUDIO
+    # 4️⃣ MERGE AUDIO
     # -------------------------------------------------
     final_voice = f"assets/voice_final_{uuid.uuid4().hex}.wav"
     concat_list = f"assets/voice_concat_{uuid.uuid4().hex}.txt"
@@ -221,50 +228,35 @@ Return ONLY the sentence.
             f.write(f"file '{os.path.abspath(cta_audio)}'\n")
 
     subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0",
-            "-i", concat_list,
-            "-c", "copy",
-            final_voice
-        ],
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list, "-c", "copy", final_voice],
         check=True
     )
 
     total_duration = min(get_audio_duration(final_voice), 59.0)
-    logger.info(f"Final narration duration: {total_duration:.2f}s")
 
+    # -------------------------------------------------
+    # 5️⃣ CAPTIONS
+    # -------------------------------------------------
+    subtitles_path = None
     try:
-        os.remove(concat_list)
-    except OSError:
+        srt = f"assets/captions_{uuid.uuid4().hex}.srt"
+        generate_word_level_srt(final_voice, srt)
+        ass = srt_to_ass(srt)
+        if ass and os.path.exists(ass):
+            subtitles_path = ass
+    except Exception:
         pass
 
     # -------------------------------------------------
-    # 5️⃣ CAPTIONS (SAFE)
-    # -------------------------------------------------
-    subtitles_path = None
-
-    try:
-        srt_path = f"assets/captions_{uuid.uuid4().hex}.srt"
-        generate_word_level_srt(final_voice, srt_path)
-
-        ass_path = srt_to_ass(srt_path)
-        if ass_path and os.path.exists(ass_path):
-            subtitles_path = ass_path
-            logger.info("Subtitles generated")
-    except Exception as e:
-        logger.warning(f"Subtitles skipped: {e}")
-
-    # -------------------------------------------------
-    # 6️⃣ BACKGROUND CLIPS (DIVERSITY + REUSE)
+    # 6️⃣ BACKGROUND VIDEO (SMART & VARIED)
     # -------------------------------------------------
     expected = clip_count_for_duration(total_duration)
     fetched = fetch_background_clips(idea, expected)
 
-    final_clips = reuse_clips(fetched, expected)
-    per_clip_duration = total_duration / len(final_clips)
+    final_clips = reuse_no_adjacent(fetched, expected)
+    clip_durations = build_clip_plan(sentences, total_duration, expected)
 
-    merged_bg = concat_background_clips(final_clips, per_clip_duration)
+    merged_bg = concat_background_clips(final_clips, clip_durations)
 
     # -------------------------------------------------
     # 7️⃣ MUSIC

@@ -1,3 +1,5 @@
+# src/video_utils.py
+
 import subprocess
 import os
 import uuid
@@ -6,7 +8,6 @@ import json
 
 
 def _get_video_duration(path: str) -> float:
-    """Get duration of a video using ffprobe"""
     result = subprocess.run(
         [
             "ffprobe", "-v", "error",
@@ -18,40 +19,57 @@ def _get_video_duration(path: str) -> float:
         capture_output=True,
         text=True
     )
-
     data = json.loads(result.stdout)
     return float(data["streams"][0]["duration"])
 
 
-def concat_background_clips(clips: list[str], per_clip_duration: float) -> str:
+def concat_background_clips(
+    clips: list[str],
+    clip_durations: list[float]
+) -> str:
     """
-    Trims + concatenates background clips.
-    Reuses clips safely by slicing DIFFERENT time segments.
+    Portrait-safe background merger.
+
+    ✔ TRUE 1080x1920 at source
+    ✔ Random segment per reuse
+    ✔ No zoompan before concat
+    ✔ Stream-identical clips
+    ✔ Lossless concat
     """
+
+    if len(clips) != len(clip_durations):
+        raise ValueError("clips and clip_durations length mismatch")
 
     temp_clips = []
 
-    for clip in clips:
+    for clip, duration in zip(clips, clip_durations):
         clip_duration = _get_video_duration(clip)
 
-        # 🎯 Choose a safe random start time
-        max_start = max(0, clip_duration - per_clip_duration - 0.5)
+        max_start = max(0, clip_duration - duration - 0.5)
         start_time = random.uniform(0, max_start) if max_start > 0 else 0
 
         out = f"assets/bg_cache/trim_{uuid.uuid4().hex}.mp4"
 
+        # 🔒 NORMALIZE EVERYTHING HERE (ONCE)
         subprocess.run(
             [
                 "ffmpeg", "-y",
-                "-ss", str(start_time),      # 🔑 THIS IS THE FIX
+                "-ss", f"{start_time:.2f}",
                 "-i", clip,
-                "-t", str(per_clip_duration),
+                "-t", f"{duration:.2f}",
                 "-vf",
                 (
-                    "scale=1080:1920:"
-                    "force_original_aspect_ratio=increase,"
-                    "crop=1080:1920"
+                    "scale=1080:1920:force_original_aspect_ratio=increase,"
+                    "crop=1080:1920,"
+                    "setsar=1,setdar=9/16"
                 ),
+                "-r", "30",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-profile:v", "high",
+                "-level", "4.1",
+                "-crf", "18",
+                "-preset", "slow",
                 "-an",
                 out
             ],
@@ -60,7 +78,7 @@ def concat_background_clips(clips: list[str], per_clip_duration: float) -> str:
 
         temp_clips.append(out)
 
-    # ---------------- CONCAT ---------------- #
+    # ---------------- CONCAT (NO FILTERS, NO RE-ENCODE) ----------------
 
     concat_file = "assets/bg_cache/concat_list.txt"
     with open(concat_file, "w", encoding="utf-8") as f:
@@ -70,21 +88,18 @@ def concat_background_clips(clips: list[str], per_clip_duration: float) -> str:
     merged = "assets/bg_cache/merged_background.mp4"
 
     subprocess.run(
-    [
-        "ffmpeg", "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", concat_file,
-        "-vf", "fps=30",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-pix_fmt", "yuv420p",
-        merged
-    ],
-    check=True
-)
+        [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_file,
+            "-c", "copy",   # 🔥 THIS IS CRITICAL
+            merged
+        ],
+        check=True
+    )
 
-    # ---------------- CLEANUP ---------------- #
+    # ---------------- CLEANUP ----------------
 
     for f in temp_clips:
         try:

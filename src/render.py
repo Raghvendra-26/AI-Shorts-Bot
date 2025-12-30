@@ -2,6 +2,7 @@
 import subprocess
 import os
 
+
 def render_video(
     bg_video: str,
     audio_file: str,
@@ -14,25 +15,41 @@ def render_video(
 
     filters = []
 
-    # ---------------- VIDEO FILTER ---------------- #
+    # ---------------- VIDEO FILTER (LOCK TRUE PORTRAIT) ---------------- #
+    video_filter = (
+        "scale=1080:1920:"
+        "force_original_aspect_ratio=increase,"
+        "crop=1080:1920,"
+        "setsar=1,"
+        "setdar=9/16"
+    )
+
     if subtitles_path:
-        # IMPORTANT: escape path safely for Windows FFmpeg
+        # Windows-safe escaping for FFmpeg
         sub_path = subtitles_path.replace("\\", "/").replace(":", "\\:")
-        filters.append(f"[0:v]subtitles='{sub_path}'[vout]")
-    else:
-        filters.append("[0:v]null[vout]")
+        video_filter += f",subtitles='{sub_path}'"
+
+    filters.append(f"[0:v]{video_filter}[vout]")
 
     # ---------------- AUDIO FILTER ---------------- #
     filters.append(
         "[1:a]"
-        "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
-        "highpass=f=80,lowpass=f=12000,alimiter=limit=0.97[voice]"
+        "aformat=sample_fmts=fltp:"
+        "sample_rates=44100:"
+        "channel_layouts=stereo,"
+        "highpass=f=80,"
+        "lowpass=f=12000,"
+        "alimiter=limit=0.97"
+        "[voice]"
     )
 
     filters.append(
         "[2:a]"
-        "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
-        "volume=0.15[music]"
+        "aformat=sample_fmts=fltp:"
+        "sample_rates=44100:"
+        "channel_layouts=stereo,"
+        "volume=0.20"
+        "[music]"
     )
 
     filters.append("[voice][music]amix=inputs=2:normalize=0[aout]")
@@ -41,15 +58,17 @@ def render_video(
 
     cmd = [
         "ffmpeg", "-y",
+
+        # Duration guard
         "-t", str(duration),
 
-        # background loop
+        # Background (loop)
         "-stream_loop", "-1", "-i", bg_video,
 
-        # voice
+        # Voice
         "-i", audio_file,
 
-        # music loop
+        # Music (loop)
         "-stream_loop", "-1", "-i", music_file,
 
         "-filter_complex", filter_complex,
@@ -58,10 +77,15 @@ def render_video(
         "-map", "[aout]",
 
         "-c:v", "libx264",
+        "-profile:v", "high",
+        "-level", "4.2",
+        "-crf", "18",
         "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-shortest",
 
+        "-c:a", "aac",
+        "-b:a", "192k",
+
+        "-shortest",
         output_file
     ]
 
