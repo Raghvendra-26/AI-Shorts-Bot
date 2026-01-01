@@ -6,6 +6,8 @@ import uuid
 import random
 import re
 
+# ---------------- IMPORTS ---------------- #
+
 from src.tts_edge import text_to_speech
 from src.captions_whisper import generate_word_level_srt
 from src.text_utils import sanitize_for_tts, clean_llm_script, sanitize_spoken_script
@@ -13,14 +15,17 @@ from src.bg_music_fetcher import fetch_background_music
 from src.render import render_video
 from src.utils.srt_to_ass import srt_to_ass
 from src.utils.logger import logger
+
 from src.script_quality import (
     generate_multiple_scripts,
     select_best_script,
     regenerate_hook,
     rewrite_long_sentences
 )
+
 from src.bg_fetcher import fetch_background_clips
 from src.video_utils import concat_background_clips
+from src.metadata_utils import generate_metadata
 
 
 # ---------------- CONSTANTS ---------------- #
@@ -37,7 +42,7 @@ CTA_FALLBACK_POOL = [
 ]
 
 
-# ---------------- UTILS ---------------- #
+# ---------------- AUDIO UTILS ---------------- #
 
 def get_audio_duration(path: str) -> float:
     cmd = [
@@ -49,6 +54,8 @@ def get_audio_duration(path: str) -> float:
     data = json.loads(subprocess.run(cmd, capture_output=True, text=True).stdout)
     return float(data["streams"][0]["duration"])
 
+
+# ---------------- VIDEO PLANNING ---------------- #
 
 def clip_count_for_duration(duration: float) -> int:
     if duration <= 30:
@@ -63,37 +70,26 @@ def split_sentences(text: str) -> list[str]:
     return [p for p in parts if len(p.split()) >= 4]
 
 
-def build_clip_plan(
-    sentences: list[str],
-    total_duration: float,
-    expected_clips: int
-) -> list[float]:
-    """
-    Sentence-aware clip durations.
-    """
+def build_clip_plan(sentences: list[str], total_duration: float, expected: int) -> list[float]:
     if not sentences:
-        return [total_duration / expected_clips] * expected_clips
+        return [total_duration / expected] * expected
 
     weights = [max(len(s.split()), 6) for s in sentences]
     total_weight = sum(weights)
 
     durations = [(w / total_weight) * total_duration for w in weights]
 
-    # Reduce / expand to expected clip count
-    if len(durations) > expected_clips:
-        durations = durations[:expected_clips]
-    elif len(durations) < expected_clips:
-        avg = total_duration / expected_clips
-        while len(durations) < expected_clips:
+    if len(durations) > expected:
+        durations = durations[:expected]
+    elif len(durations) < expected:
+        avg = total_duration / expected
+        while len(durations) < expected:
             durations.append(avg)
 
     return durations
 
 
 def reuse_no_adjacent(clips: list[str], target: int) -> list[str]:
-    """
-    Reuse clips but never allow adjacent duplicates.
-    """
     if not clips:
         raise RuntimeError("No background clips available")
 
@@ -111,12 +107,7 @@ def reuse_no_adjacent(clips: list[str], target: int) -> list[str]:
 # ---------------- CTA SAFETY ---------------- #
 
 def is_tts_safe(text: str) -> bool:
-    if not text:
-        return False
-    text = text.strip()
-    if len(text) < 8:
-        return False
-    if len(text.split()) < 3:
+    if not text or len(text.split()) < 3:
         return False
     if not re.search(r"[aeiouAEIOU]", text):
         return False
@@ -128,8 +119,7 @@ def try_attach_cta(text: str, body_duration: float):
         return None, None, 0.0
 
     try:
-        safe_text = f"{text}. Thanks for watching."
-        audio = text_to_speech(sanitize_for_tts(safe_text))
+        audio = text_to_speech(sanitize_for_tts(text))
         duration = get_audio_duration(audio)
     except Exception:
         return None, None, 0.0
@@ -148,7 +138,12 @@ def try_attach_cta(text: str, body_duration: float):
 # ---------------- MAIN PIPELINE ---------------- #
 
 def generate_short(idea: str):
-    logger.info(f"Using idea: {idea}")
+    logger.info(f"🎯 IDEA: {idea}")
+
+    # Output folder (immutable per video)
+    video_id = uuid.uuid4().hex[:8]
+    output_dir = os.path.join("outputs", video_id)
+    os.makedirs(output_dir, exist_ok=True)
 
     # -------------------------------------------------
     # 1️⃣ SCRIPT BODY
@@ -157,7 +152,7 @@ def generate_short(idea: str):
 Write a spoken YouTube Shorts script BODY (NO CTA).
 
 Rules:
-- Strictly between 110–120 words
+- 110–120 words
 - Conversational
 - No meta language
 - No CTA
@@ -217,10 +212,10 @@ Return ONLY the sentence.
         )
 
     # -------------------------------------------------
-    # 4️⃣ MERGE AUDIO
+    # 4️⃣ MERGE VOICE
     # -------------------------------------------------
-    final_voice = f"assets/voice_final_{uuid.uuid4().hex}.wav"
-    concat_list = f"assets/voice_concat_{uuid.uuid4().hex}.txt"
+    final_voice = os.path.join(output_dir, "voice.wav")
+    concat_list = os.path.join(output_dir, "voice_concat.txt")
 
     with open(concat_list, "w", encoding="utf-8") as f:
         f.write(f"file '{os.path.abspath(body_audio)}'\n")
@@ -239,7 +234,7 @@ Return ONLY the sentence.
     # -------------------------------------------------
     subtitles_path = None
     try:
-        srt = f"assets/captions_{uuid.uuid4().hex}.srt"
+        srt = os.path.join(output_dir, "captions.srt")
         generate_word_level_srt(final_voice, srt)
         ass = srt_to_ass(srt)
         if ass and os.path.exists(ass):
@@ -248,7 +243,7 @@ Return ONLY the sentence.
         pass
 
     # -------------------------------------------------
-    # 6️⃣ BACKGROUND VIDEO (SMART & VARIED)
+    # 6️⃣ BACKGROUND VIDEO
     # -------------------------------------------------
     expected = clip_count_for_duration(total_duration)
     fetched = fetch_background_clips(idea, expected)
@@ -264,18 +259,29 @@ Return ONLY the sentence.
     bg_music = fetch_background_music(idea)
 
     # -------------------------------------------------
-    # 8️⃣ RENDER
+    # 8️⃣ METADATA (IDEA-DRIVEN)
+    # -------------------------------------------------
+    metadata = generate_metadata(
+        idea=idea,
+        script=script_body
+    )
+
+    with open(os.path.join(output_dir, "metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+    # -------------------------------------------------
+    # 9️⃣ RENDER
     # -------------------------------------------------
     render_video(
         bg_video=merged_bg,
         audio_file=final_voice,
         music_file=bg_music,
-        output_file="outputs/final_short.mp4",
+        output_file=os.path.join(output_dir, "final_short.mp4"),
         duration=total_duration,
         subtitles_path=subtitles_path
     )
 
-    logger.info("✅ Short video generated successfully")
+    logger.info(f"✅ SHORT GENERATED → {output_dir}")
 
 
 # ---------------- ENTRY ---------------- #
