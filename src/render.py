@@ -15,7 +15,7 @@ def render_video(
 
     filters = []
 
-    # ---------------- VIDEO FILTER (LOCK TRUE PORTRAIT) ---------------- #
+    # ---------------- VIDEO FILTER (TRUE PORTRAIT LOCK) ---------------- #
     video_filter = (
         "scale=1080:1920:"
         "force_original_aspect_ratio=increase,"
@@ -25,13 +25,14 @@ def render_video(
     )
 
     if subtitles_path:
-        # Windows-safe escaping for FFmpeg
-        sub_path = subtitles_path.replace("\\", "/").replace(":", "\\:")
-        video_filter += f",subtitles='{sub_path}'"
+        # ✅ Absolute path + Windows-safe escaping for FFmpeg subtitles filter
+        abs_subs = os.path.abspath(subtitles_path)
+        safe_subs = abs_subs.replace("\\", "/").replace(":", "\\:")
+        video_filter += f",subtitles='{safe_subs}'"
 
     filters.append(f"[0:v]{video_filter}[vout]")
 
-    # ---------------- AUDIO FILTER ---------------- #
+    # ---------------- VOICE FILTER ---------------- #
     filters.append(
         "[1:a]"
         "aformat=sample_fmts=fltp:"
@@ -43,6 +44,7 @@ def render_video(
         "[voice]"
     )
 
+    # ---------------- MUSIC FILTER ---------------- #
     filters.append(
         "[2:a]"
         "aformat=sample_fmts=fltp:"
@@ -52,6 +54,7 @@ def render_video(
         "[music]"
     )
 
+    # ---------------- MIX ---------------- #
     filters.append("[voice][music]amix=inputs=2:normalize=0[aout]")
 
     filter_complex = ";".join(filters)
@@ -59,16 +62,16 @@ def render_video(
     cmd = [
         "ffmpeg", "-y",
 
-        # Duration guard
+        # Hard duration cap (Shorts-safe)
         "-t", str(duration),
 
-        # Background (loop)
+        # Background video (looped)
         "-stream_loop", "-1", "-i", bg_video,
 
         # Voice
         "-i", audio_file,
 
-        # Music (loop)
+        # Music (looped)
         "-stream_loop", "-1", "-i", music_file,
 
         "-filter_complex", filter_complex,
@@ -76,12 +79,14 @@ def render_video(
         "-map", "[vout]",
         "-map", "[aout]",
 
+        # Video encoding (YouTube Shorts safe)
         "-c:v", "libx264",
         "-profile:v", "high",
         "-level", "4.2",
         "-crf", "18",
         "-pix_fmt", "yuv420p",
 
+        # Audio encoding
         "-c:a", "aac",
         "-b:a", "192k",
 

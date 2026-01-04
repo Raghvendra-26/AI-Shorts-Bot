@@ -1,5 +1,5 @@
 from src.audio_utils import get_audio_duration
-from src.video import create_background
+from utils.fallback_background import create_background
 from src.render import render_video
 from src.captions import create_srt
 

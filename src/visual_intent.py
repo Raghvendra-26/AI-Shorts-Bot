@@ -1,9 +1,11 @@
 # src/visual_intent.py
 
 import re
+import random
 from collections import Counter
 
-# Words that add no visual meaning
+# ---------------- BASIC FILTERS ---------------- #
+
 STOPWORDS = {
     "the", "is", "are", "was", "were", "why", "how", "what",
     "you", "your", "they", "them", "this", "that", "these",
@@ -11,56 +13,98 @@ STOPWORDS = {
     "to", "of", "in", "on", "with", "for", "as", "by",
 }
 
-# Map abstract ideas → concrete visuals
-VISUAL_EXPANSIONS = {
-    "discipline": [
-        "man waking up early dark room",
-        "athlete training alone sunrise",
-        "person resisting temptation cinematic",
-    ],
-    "focus": [
-        "man concentrating desk night",
-        "deep focus work dark room",
-        "focused eyes cinematic close up",
-    ],
-    "success": [
-        "athlete winning slow motion",
-        "business success city night",
-        "man standing alone mountain top",
-    ],
-    "failure": [
-        "man sitting alone defeated",
-        "athlete exhausted after loss",
-        "dark room emotional moment",
-    ],
-    "growth": [
-        "man improving daily routine",
-        "training progress montage",
-        "sunrise journey cinematic",
-    ],
-    "money": [
-        "city skyline night wealth",
-        "entrepreneur working late office",
-        "luxury lifestyle cinematic",
-    ],
-    "life": [
-        "real life moments cinematic",
-        "people walking city slow motion",
-        "human behavior documentary style",
+# ---------------- VISUAL SEMANTICS ---------------- #
+
+ABSTRACT_TO_CONCRETE = {
+    "discipline": ["waking up early", "training alone", "daily routine"],
+    "focus": ["deep work", "concentration", "thinking intensely"],
+    "success": ["achievement moment", "winning", "goal reached"],
+    "failure": ["disappointment", "exhaustion", "setback moment"],
+    "growth": ["self improvement", "progress journey", "practice routine"],
+    "money": ["financial thinking", "business work", "wealth lifestyle"],
+    "brain": ["thinking", "mental process", "decision making"],
+    "mind": ["thoughts", "overthinking", "inner conflict"],
+    "life": ["real life moment", "daily routine", "human behavior"],
+    "habit": ["repeated action", "morning routine", "night routine"],
+    "sleep": ["tired person", "late night thinking", "restlessness"],
+}
+
+ACTIONS = [
+    "thinking",
+    "working",
+    "walking",
+    "training",
+    "sitting alone",
+    "looking at screen",
+    "writing",
+    "reflecting",
+]
+
+TIMES = [
+    "night",
+    "early morning",
+    "sunrise",
+    "late evening",
+]
+
+CAMERA_STYLES = [
+    "cinematic",
+    "slow motion",
+    "close up",
+    "wide shot",
+    "handheld",
+]
+
+MOODS = [
+    "moody lighting",
+    "soft light",
+    "dramatic shadows",
+    "natural light",
+]
+
+GENERIC_FALLBACKS = [
+    "cinematic abstract background motion",
+    "soft bokeh cinematic lights",
+    "slow motion abstract visuals",
+]
+
+# ---------------- TOPIC BIAS ---------------- #
+
+def classify_topic_bias(idea: str) -> str:
+    text = idea.lower()
+
+    if any(k in text for k in ["brain", "mind", "psychology", "thinking"]):
+        return "indoor"
+    if any(k in text for k in ["focus", "habit", "study", "work"]):
+        return "desk"
+    if any(k in text for k in ["success", "win", "goal", "achieve"]):
+        return "outdoor"
+    if any(k in text for k in ["failure", "mistake", "loss", "dark"]):
+        return "dark"
+    if any(k in text for k in ["money", "business", "wealth"]):
+        return "office"
+
+    return "mixed"
+
+
+SCENE_BIAS = {
+    "indoor": ["dark room", "bedroom", "home interior"],
+    "desk": ["desk setup", "workspace", "office desk"],
+    "outdoor": ["city street", "outdoor urban", "open road"],
+    "office": ["corporate office", "business workspace", "city office"],
+    "dark": ["dark room", "low light interior", "moody indoor"],
+    "mixed": [
+        "dark room",
+        "office",
+        "city street",
+        "home interior",
+        "outdoor urban",
     ],
 }
 
-GENERIC_VISUALS = [
-    "cinematic abstract motion background",
-    "moody cinematic lighting",
-    "cinematic bokeh light motion",
-]
-
+# ---------------- KEYWORD EXTRACTION ---------------- #
 
 def extract_keywords(text: str, top_k: int = 5) -> list[str]:
-    """
-    Extract most important words from idea
-    """
     words = re.findall(r"[a-zA-Z]{3,}", text.lower())
     words = [w for w in words if w not in STOPWORDS]
 
@@ -71,31 +115,55 @@ def extract_keywords(text: str, top_k: int = 5) -> list[str]:
     return [w for w, _ in freq.most_common(top_k)]
 
 
-def build_visual_queries(idea: str) -> list[str]:
+# ---------------- QUERY BUILDER ---------------- #
+
+def _build_dynamic_query(base: str, bias: str) -> str:
     """
-    Convert idea → high-quality visual search queries
+    Build a visually rich, topic-aware search query
+    """
+    scenes = SCENE_BIAS.get(bias, SCENE_BIAS["mixed"])
+
+    parts = [
+        base,
+        random.choice(ACTIONS),
+        random.choice(scenes),
+        random.choice(TIMES),
+        random.choice(CAMERA_STYLES),
+        random.choice(MOODS),
+    ]
+
+    return " ".join(parts)
+
+
+def build_visual_queries(idea: str, max_queries: int = 12) -> list[str]:
+    """
+    Convert idea → diverse, topic-connected visual queries
     """
     keywords = extract_keywords(idea)
+    bias = classify_topic_bias(idea)
+
     queries: list[str] = []
 
-    # Expand abstract ideas into visuals
     for kw in keywords:
-        if kw in VISUAL_EXPANSIONS:
-            queries.extend(VISUAL_EXPANSIONS[kw])
-        else:
-            # Generic semantic fallback
-            queries.append(f"{kw} cinematic background")
-            queries.append(f"{kw} real life footage")
+        bases = ABSTRACT_TO_CONCRETE.get(kw, [kw])
+
+        for base in bases:
+            queries.append(_build_dynamic_query(base, bias))
+
+    # Shuffle so same idea ≠ same order
+    random.shuffle(queries)
 
     # Always add safe cinematic fallbacks
-    queries.extend(GENERIC_VISUALS)
+    queries.extend(GENERIC_FALLBACKS)
 
-    # Deduplicate (preserve order)
+    # Deduplicate while preserving order
     seen = set()
     final = []
     for q in queries:
         if q not in seen:
             seen.add(q)
             final.append(q)
+        if len(final) >= max_queries:
+            break
 
     return final

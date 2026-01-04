@@ -6,6 +6,7 @@ import os
 import subprocess
 import random
 import time
+from typing import Optional
 
 # ---------------- CONFIG ---------------- #
 
@@ -15,7 +16,7 @@ PITCH = "+0Hz"
 ASSETS_DIR = "assets"
 os.makedirs(ASSETS_DIR, exist_ok=True)
 
-# 🎙️ Male voice pools
+# 🎙️ Male voice pools (English-focused; Hindi handled via override)
 VOICE_POOLS = {
     "motivational": [
         "en-IN-PrabhatNeural",
@@ -90,14 +91,20 @@ async def _tts_chunk(text: str, out_path: str, voice: str):
 
 # ---------------- PUBLIC API ---------------- #
 
-def text_to_speech(text: str) -> str:
+def text_to_speech(
+    text: str,
+    voice: Optional[str] = None
+) -> str:
     """
-    Production-safe Edge-TTS:
+    Production-safe Edge-TTS
+
+    Supports:
+    - Optional explicit voice override (for language switching)
     - Mood-based voice selection
     - Voice rotation on failure
     - Padding retry
     - Silent failure detection
-    - FINAL semantic simplification fallback
+    - Final semantic simplification fallback
     """
 
     text = text.strip()
@@ -117,9 +124,16 @@ def text_to_speech(text: str) -> str:
     if not chunks:
         raise RuntimeError("TTS received empty text")
 
-    mood = detect_mood(text)
-    voices = VOICE_POOLS.get(mood, VOICE_POOLS["neutral"]).copy()
-    random.shuffle(voices)
+    # ---------------- VOICE SELECTION ---------------- #
+
+    if voice:
+        # External override (language-aware)
+        voices = [voice]
+    else:
+        # Existing intelligent mood-based logic
+        mood = detect_mood(text)
+        voices = VOICE_POOLS.get(mood, VOICE_POOLS["neutral"]).copy()
+        random.shuffle(voices)
 
     temp_files = []
 
@@ -127,15 +141,15 @@ def text_to_speech(text: str) -> str:
         success = False
 
         # ---------------- NORMAL VOICE ROTATION ---------------- #
-        for voice in voices:
+        for v in voices:
             out = f"assets/tmp_{i}_{uuid.uuid4().hex}.wav"
 
             try:
-                asyncio.run(_tts_chunk(chunk, out, voice))
+                asyncio.run(_tts_chunk(chunk, out, v))
             except Exception:
                 padded = f"Listen carefully. {chunk}"
                 try:
-                    asyncio.run(_tts_chunk(padded, out, voice))
+                    asyncio.run(_tts_chunk(padded, out, v))
                 except Exception:
                     continue
 
@@ -149,14 +163,14 @@ def text_to_speech(text: str) -> str:
             except OSError:
                 pass
 
-        # ---------------- FINAL FAILSAFE (OPTION A) ---------------- #
+        # ---------------- FINAL FAILSAFE ---------------- #
         if not success:
             simplified = (
                 "Here is something interesting. "
                 + chunk.replace(",", ".").replace(" and ", ". ")
             )
 
-            fallback_voice = "en-US-GuyNeural"
+            fallback_voice = voice or "en-US-GuyNeural"
             out = f"assets/tmp_{i}_{uuid.uuid4().hex}.wav"
 
             try:

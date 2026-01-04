@@ -1,20 +1,36 @@
+# ----------------------------
 # Python
+# ----------------------------
 __pycache__/
 *.pyc
 
-# Virtual env
+# ----------------------------
+# Virtual environment
+# ----------------------------
 venv/
 
+# ----------------------------
 # Environment variables
+# ----------------------------
 .env
 
-# Generated content
+# ----------------------------
+# Generated content (ALWAYS IGNORE)
+# ----------------------------
 assets/
 outputs/
 
+# Explicitly ignore video history cache
+video_history.json
+assets/video_history.json
+
+# ----------------------------
 # Tools / binaries
+# ----------------------------
 tools/piper/
 
+# ----------------------------
 # OS junk
+# ----------------------------
 .DS_Store
 Thumbs.db
