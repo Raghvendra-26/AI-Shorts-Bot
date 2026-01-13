@@ -2,31 +2,66 @@
 # Python
 # ----------------------------
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
 
 # ----------------------------
 # Virtual environment
 # ----------------------------
 venv/
+.venv/
 
 # ----------------------------
-# Environment variables
+# Environment variables / secrets
 # ----------------------------
 .env
+.env.*
+credentials/
+client_secret*.json
+token*.json
+
+# ----------------------------
+# Google / YouTube OAuth cache
+# ----------------------------
+credentials/token.json
+credentials/*.json
 
 # ----------------------------
 # Generated content (ALWAYS IGNORE)
 # ----------------------------
 assets/
 outputs/
+rendered_videos/
+temp/
+cache/
 
 # Explicitly ignore video history cache
 video_history.json
 assets/video_history.json
 
 # ----------------------------
+# Analytics outputs / local DB
+# ----------------------------
+*.db
+*.sqlite
+*.sqlite3
+analytics_output/
+logs/
+
+# ----------------------------
+# AI / ML artifacts
+# ----------------------------
+models/
+checkpoints/
+embeddings/
+
+# ----------------------------
 # Tools / binaries
 # ----------------------------
+tools/
 tools/piper/
 
 # ----------------------------
@@ -34,3 +69,20 @@ tools/piper/
 # ----------------------------
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Icon?
+
+# ----------------------------
+# IDE / Editor
+# ----------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ----------------------------
+# Build / distribution
+# ----------------------------
+build/
+dist/
+*.egg-info/

@@ -1,0 +1,3 @@
+CHANNEL_NAME = "Real MindSpark Facts"
+
+CHANNEL_ID = "UCcw0I3FK6j7J5pbXsVjAKRg"
