@@ -1,6 +1,8 @@
 import re
 from src.ollama_llm import generate_short_script
 from src.utils.logger import logger
+from yt_analytics.prompt_context import build_prompt_with_insights
+
 
 HOOK_KEYWORDS = {
     "why", "secret", "truth", "mistake",
@@ -85,15 +87,20 @@ def score_script(script: str) -> dict:
 
 def generate_multiple_scripts(prompt: str, n=2):
     """Generate fewer scripts to avoid CUDA crashes"""
+
+    # 🔹 Analytics-aware prompt enrichment (SAFE)
+    enriched_prompt = build_prompt_with_insights(prompt)
+
     scripts = []
     for _ in range(n):
         try:
-            s = generate_short_script(prompt)
+            s = generate_short_script(enriched_prompt)
             if s:
                 scripts.append(s)
         except Exception as e:
             logger.warning(f"⚠️ Script generation failed: {e}")
     return scripts
+
 
 def select_best_script(scripts: list):
     scored = []
